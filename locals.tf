@@ -16,4 +16,9 @@ locals {
 
   # Select the appropriate RHEL 9 AMI
   selected_rhel9_ami = local.is_govcloud ? local.rhel9_amis.govcloud[var.aws_region] : local.rhel9_amis.commercial[var.aws_region]
+
+  rhel9_additional_components = compact([
+    try(aws_imagebuilder_component.my_custom_app.arn, null)
+  ])
 }
+

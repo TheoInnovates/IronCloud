@@ -58,9 +58,4 @@ resource "aws_imagebuilder_image_pipeline" "rhel9_custom" {
 
 }
 
-# Output the custom component ARN for use with additional_components
-output "custom_app_component_arn" {
-  description = "ARN of the custom application component"
-  value       = aws_imagebuilder_component.my_custom_app.arn
-}
 

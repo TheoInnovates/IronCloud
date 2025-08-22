@@ -13,5 +13,7 @@ module "image_builder_rhel9" {
   subnet_id    = module.vpc.private_subnets[0]
   rhel9_ami_id = local.selected_rhel9_ami
 
+  additional_components = local.rhel9_additional_components
+
   tags = {}
 }
