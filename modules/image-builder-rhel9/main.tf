@@ -336,8 +336,8 @@ resource "aws_imagebuilder_image_recipe" "rhel9" {
   })
 }
 
-resource "aws_imagebuilder_image_pipeline" "base_rhel9" {
-  name                             = "base-rhel9-pipeline"
+resource "aws_imagebuilder_image_pipeline" "rhel9" {
+  name                             = "${var.name}-rhel9-pipeline"
   description                      = "RHEL 9 image pipeline with Docker, Java and additional components"
   image_recipe_arn                 = aws_imagebuilder_image_recipe.rhel9.arn
   infrastructure_configuration_arn = aws_imagebuilder_infrastructure_configuration.rhel9.arn

@@ -33,3 +33,7 @@ output "security_group_id" {
   value       = aws_security_group.image_builder.id
 }
 
+output "rhel9_pipeline_arn" {
+  description = "ARN of the RHEL 9 image pipeline"
+  value       = aws_imagebuilder_image_pipeline.rhel9.arn
+}
