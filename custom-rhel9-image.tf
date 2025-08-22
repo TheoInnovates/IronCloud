@@ -33,29 +33,22 @@ resource "aws_imagebuilder_component" "my_custom_app" {
   }
 }
 
-# RHEL 9 Image Pipeline with Custom Components
-resource "aws_imagebuilder_image_pipeline" "rhel9_custom" {
-  name                             = "custom_rhel_9"
-  description                      = "RHEL 9 image pipeline with Docker, Java and custom app"
-  image_recipe_arn                 = module.image_builder_rhel9.image_recipe_arn
-  infrastructure_configuration_arn = module.image_builder_rhel9.rhel9_infrastructure_configuration_arn
-  distribution_configuration_arn   = module.image_builder_rhel9.rhel9_distribution_configuration_arn
-  status                           = "ENABLED"
+module "image_builder_rhel9" {
+  source = "./modules/image-builder-rhel9"
 
-  schedule {
-    schedule_expression                = "cron(0 2 ? * SUN *)"
-    pipeline_execution_start_condition = "EXPRESSION_MATCH_AND_DEPENDENCY_UPDATES_AVAILABLE"
-  }
+  name         = "custom_rhel9"
+  vpc_id       = module.vpc.vpc_id
+  subnet_id    = module.vpc.private_subnets[0]
+  rhel9_ami_id = local.selected_rhel9_ami
+  s3_bucket_name = var.s3_bucket_name
 
-  image_tests_configuration {
-    image_tests_enabled = true
-    timeout_minutes     = 720
-  }
+  additional_components = compact([
+    try(aws_imagebuilder_component.my_custom_app.arn, null)
+  ])
 
-   image_scanning_configuration {
-     image_scanning_enabled = true
-   }
-
+  tags = {}
 }
+
+
 
 

@@ -42,3 +42,9 @@ variable "image_name" {
   type        = string
   default     = ""
 }
+
+variable "s3_bucket_name" {
+  description = "Name of the S3 bucket for Image Builder logs and artifacts"
+  type        = string
+  
+}

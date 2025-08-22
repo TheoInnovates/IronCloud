@@ -9,37 +9,6 @@ resource "random_string" "bucket_suffix" {
   upper   = false
 }
 
-# S3 bucket for Image Builder logs
-resource "aws_s3_bucket" "image_builder_logs" {
-  bucket = "${var.name}-rhel9-image-builder-logs-${random_string.bucket_suffix.result}"
-}
-
-resource "aws_s3_bucket_versioning" "image_builder_logs" {
-  bucket = aws_s3_bucket.image_builder_logs.id
-  versioning_configuration {
-    status = "Enabled"
-  }
-}
-
-resource "aws_s3_bucket_server_side_encryption_configuration" "image_builder_logs" {
-  bucket = aws_s3_bucket.image_builder_logs.id
-
-  rule {
-    apply_server_side_encryption_by_default {
-      sse_algorithm = "AES256"
-    }
-  }
-}
-
-resource "aws_s3_bucket_public_access_block" "image_builder_logs" {
-  bucket = aws_s3_bucket.image_builder_logs.id
-
-  block_public_acls       = true
-  block_public_policy     = true
-  ignore_public_acls      = true
-  restrict_public_buckets = true
-}
-
 # IAM role for Image Builder instances
 resource "aws_iam_role" "image_builder_instance_role" {
   name = "${var.name}-rhel9-image-builder-instance-role"
@@ -86,7 +55,7 @@ resource "aws_iam_role_policy" "s3_bucket_policy" {
           "s3:PutObjectAcl",
           "s3:DeleteObject"
         ]
-        Resource = "${aws_s3_bucket.image_builder_logs.arn}/*"
+        Resource = "arn:${data.aws_partition.current.partition}:s3:::${var.s3_bucket_name}/*"
       },
       {
         Effect = "Allow"
@@ -94,7 +63,7 @@ resource "aws_iam_role_policy" "s3_bucket_policy" {
           "s3:ListBucket",
           "s3:GetBucketLocation"
         ]
-        Resource = aws_s3_bucket.image_builder_logs.arn
+        Resource = "arn:${data.aws_partition.current.partition}:s3:::${var.s3_bucket_name}"
       }
     ]
   })
@@ -192,8 +161,8 @@ resource "aws_imagebuilder_component" "scap_compliance_test" {
                 "SCAP_EXIT_CODE=$?",
                 "# Upload results to S3 bucket",
                 "echo 'Uploading SCAP results to S3...'",
-                "aws s3 cp /tmp/scap-results-$TIMESTAMP.xml s3://${aws_s3_bucket.image_builder_logs.bucket}/scap-compliance/ami-$AMI_ID/instance-$INSTANCE_ID/scap-results-$TIMESTAMP.xml",
-                "aws s3 cp /tmp/scap-report-$TIMESTAMP.html s3://${aws_s3_bucket.image_builder_logs.bucket}/scap-compliance/ami-$AMI_ID/instance-$INSTANCE_ID/scap-report-$TIMESTAMP.html",
+                "aws s3 cp /tmp/scap-results-$TIMESTAMP.xml s3://${var.s3_bucket_name}/scap-compliance/ami-$AMI_ID/instance-$INSTANCE_ID/scap-results-$TIMESTAMP.xml",
+                "aws s3 cp /tmp/scap-report-$TIMESTAMP.html s3://${var.s3_bucket_name}/scap-compliance/ami-$AMI_ID/instance-$INSTANCE_ID/scap-report-$TIMESTAMP.html",
                 "# Create summary file",
                 "echo '{' > /tmp/scap-summary-$TIMESTAMP.json",
                 "echo '  \"timestamp\": \"'$TIMESTAMP'\",' >> /tmp/scap-summary-$TIMESTAMP.json",
@@ -209,13 +178,13 @@ resource "aws_imagebuilder_component" "scap_compliance_test" {
                 "fi",
                 "echo '}' >> /tmp/scap-summary-$TIMESTAMP.json",
                 "# Upload summary to S3",
-                "aws s3 cp /tmp/scap-summary-$TIMESTAMP.json s3://${aws_s3_bucket.image_builder_logs.bucket}/scap-compliance/ami-$AMI_ID/instance-$INSTANCE_ID/scap-summary-$TIMESTAMP.json",
+                "aws s3 cp /tmp/scap-summary-$TIMESTAMP.json s3://${var.s3_bucket_name}/scap-compliance/ami-$AMI_ID/instance-$INSTANCE_ID/scap-summary-$TIMESTAMP.json",
                 "# Display results",
                 "echo 'SCAP compliance test completed'",
-                "echo 'Results uploaded to: s3://${aws_s3_bucket.image_builder_logs.bucket}/scap-compliance/ami-'$AMI_ID'/instance-'$INSTANCE_ID'/'",
+                "echo 'Results uploaded to: s3://${var.s3_bucket_name}/scap-compliance/ami-'$AMI_ID'/instance-'$INSTANCE_ID'/'",
                 "if [ $SCAP_EXIT_CODE -ne 0 ]; then",
                 "  echo 'SCAP compliance scan completed with findings'",
-                "  echo 'Review report at: s3://${aws_s3_bucket.image_builder_logs.bucket}/scap-compliance/ami-'$AMI_ID'/instance-'$INSTANCE_ID'/scap-report-'$TIMESTAMP'.html'",
+                "  echo 'Review report at: s3://${var.s3_bucket_name}/scap-compliance/ami-'$AMI_ID'/instance-'$INSTANCE_ID'/scap-report-'$TIMESTAMP'.html'",
                 "else",
                 "  echo 'SCAP compliance scan passed successfully'",
                 "fi"
@@ -276,7 +245,7 @@ resource "aws_imagebuilder_infrastructure_configuration" "rhel9" {
 
   logging {
     s3_logs {
-      s3_bucket_name = aws_s3_bucket.image_builder_logs.bucket
+      s3_bucket_name = var.s3_bucket_name
       s3_key_prefix  = "rhel9-logs"
     }
   }
@@ -367,3 +336,29 @@ resource "aws_imagebuilder_image_recipe" "rhel9" {
   })
 }
 
+resource "aws_imagebuilder_image_pipeline" "base_rhel9" {
+  name                             = "base-rhel9-pipeline"
+  description                      = "RHEL 9 image pipeline with Docker, Java and additional components"
+  image_recipe_arn                 = aws_imagebuilder_image_recipe.rhel9.arn
+  infrastructure_configuration_arn = aws_imagebuilder_infrastructure_configuration.rhel9.arn
+  distribution_configuration_arn   = aws_imagebuilder_distribution_configuration.rhel9.arn
+  status                           = "ENABLED"
+
+  schedule {
+    schedule_expression                = "cron(0 2 ? * SUN *)"
+    pipeline_execution_start_condition = "EXPRESSION_MATCH_AND_DEPENDENCY_UPDATES_AVAILABLE"
+  }
+
+  image_tests_configuration {
+    image_tests_enabled = true
+    timeout_minutes     = 720
+  }
+
+   image_scanning_configuration {
+     image_scanning_enabled = true
+   }
+
+  tags = merge(var.tags, {
+    OS = "rhel9"
+  })
+}

@@ -28,11 +28,6 @@ output "rhel9_distribution_configuration_arn" {
   value       = aws_imagebuilder_distribution_configuration.rhel9.arn
 }
 
-output "logs_bucket_name" {
-  description = "Name of the S3 bucket for RHEL 9 Image Builder logs"
-  value       = aws_s3_bucket.image_builder_logs.bucket
-}
-
 output "security_group_id" {
   description = "ID of the RHEL 9 Image Builder security group"
   value       = aws_security_group.image_builder.id
