@@ -129,6 +129,196 @@ resource "aws_imagebuilder_component" "docker_install" {
   tags = var.tags
 }
 
+# Red Hat Official Ansible STIG component
+resource "aws_imagebuilder_component" "ansible_stig" {
+  name        = "${var.name}-redhat-ansible-stig"
+  description = "Install Ansible and run Red Hat Official RHEL 9 STIG role"
+  platform    = "Linux"
+  version     = "1.0.0"
+
+  data = yamlencode({
+    name          = "${var.name}-redhat-ansible-stig"
+    description   = "Install Ansible and run Red Hat Official RHEL 9 STIG role"
+    schemaVersion = "1.0"
+    phases = [
+      {
+        name = "build"
+        steps = [
+          {
+            name   = "InstallAnsible"
+            action = "ExecuteBash"
+            inputs = {
+              commands = [
+                "# Install EPEL repository for Ansible",
+                "dnf install -y epel-release",
+                "# Install Ansible and dependencies",
+                "dnf install -y ansible-core python3-pip git",
+                "# Install additional Ansible collections that may be needed",
+                "ansible-galaxy collection install community.general",
+                "ansible-galaxy collection install ansible.posix",
+                "# Create ansible working directory",
+                "mkdir -p /tmp/ansible-stig",
+                "cd /tmp/ansible-stig"
+              ]
+            }
+          },
+          {
+            name   = "InstallRedHatSTIGRole"
+            action = "ExecuteBash"
+            inputs = {
+              commands = [
+                "cd /tmp/ansible-stig",
+                "# Install the Red Hat Official RHEL 9 STIG role",
+                "ansible-galaxy install RedHatOfficial.rhel9_stig",
+                "# Create requirements.yml for better dependency management",
+                "cat > requirements.yml << 'EOF'",
+                "---",
+                "roles:",
+                "  - name: RedHatOfficial.rhel9_stig",
+                "    version: latest",
+                "EOF",
+                "# Install from requirements file",
+                "ansible-galaxy install -r requirements.yml",
+                "echo 'Red Hat STIG role installed successfully'"
+              ]
+            }
+          },
+          {
+            name   = "CreateSTIGPlaybook"
+            action = "ExecuteBash"
+            inputs = {
+              commands = [
+                "cd /tmp/ansible-stig",
+                "# Create inventory file",
+                "echo 'localhost ansible_connection=local' > inventory",
+                "# Create the STIG playbook using the Red Hat Official role",
+                "cat > rhel9-stig-playbook.yml << 'EOF'",
+                "---",
+                "- name: Apply RHEL 9 STIG using Red Hat Official Role",
+                "  hosts: localhost",
+                "  become: true",
+                "  gather_facts: true",
+                "",
+                "  vars:",
+                "    # STIG Configuration Variables",
+                "    # Set to false to skip rules that might break basic functionality",
+                "    rhel9stig_disruption_high: false",
+                "    rhel9stig_complexity_high: false",
+                "",
+                "    # Configure based on your environment",
+                "    rhel9stig_gui: false",
+                "    rhel9stig_system_is_router: false",
+                "    rhel9stig_ipv6_required: false",
+                "",
+                "    # Patch level configuration",
+                "    rhel9stig_cat1_patch: true   # High severity",
+                "    rhel9stig_cat2_patch: true   # Medium severity", 
+                "    rhel9stig_cat3_patch: false  # Low severity (can be disruptive)",
+                "",
+                "    # Skip rules that might interfere with cloud environments",
+                "    rhel9stig_skip_for_cloud:",
+                "      - rhel_09_010001  # Disable USB storage (might affect cloud)",
+                "      - rhel_09_010002  # Disable FireWire (not applicable)",
+                "",
+                "    # Configure authentication",
+                "    rhel9stig_password_complexity:",
+                "      minlen: 15",
+                "      dcredit: -1",
+                "      ucredit: -1", 
+                "      lcredit: -1",
+                "      ocredit: -1",
+                "",
+                "    # Configure audit log settings",
+                "    rhel9stig_audit_log_storage_size: 100",
+                "",
+                "  roles:",
+                "    - RedHatOfficial.rhel9_stig",
+                "",
+                "  post_tasks:",
+                "    - name: Create STIG application summary",
+                "      copy:",
+                "        content: |",
+                "          RHEL 9 STIG Application Summary",
+                "          ================================",
+                "          Applied on: $(date -u +%Y-%m-%dT%H:%M:%SZ)",
+                "          Hostname: $(hostname)",
+                "          RHEL Version: $(cat /etc/redhat-release)",
+                "          STIG Role: RedHatOfficial.rhel9_stig",
+                "          CAT I (High): true",
+                "          CAT II (Medium): true",
+                "          CAT III (Low): false",
+                "        dest: /tmp/stig-application-summary.txt",
+                "EOF",
+                "echo 'STIG playbook created successfully'"
+              ]
+            }
+          },
+          {
+            name   = "RunRedHatSTIG"
+            action = "ExecuteBash"
+            inputs = {
+              commands = [
+                "cd /tmp/ansible-stig",
+                "# Set Ansible configuration for better output",
+                "export ANSIBLE_STDOUT_CALLBACK=yaml",
+                "export ANSIBLE_HOST_KEY_CHECKING=False",
+                "",
+                "# Run the Red Hat Official STIG playbook",
+                "echo 'Starting Red Hat Official RHEL 9 STIG application...'",
+                "ansible-playbook -i inventory rhel9-stig-playbook.yml -v > /tmp/ansible-stig-execution.log 2>&1",
+                "ANSIBLE_EXIT_CODE=$?",
+                "",
+                "# Create detailed results",
+                "TIMESTAMP=$(date +%Y%m%d-%H%M%S)",
+                "AMI_ID=$(curl -s http://169.254.169.254/latest/meta-data/ami-id || echo 'unknown')",
+                "INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id || echo 'unknown')",
+                "",
+                "# Create comprehensive results summary",
+                "cat > /tmp/rhel9-stig-results-$TIMESTAMP.json << EOF",
+                "{",
+                "  \"timestamp\": \"$TIMESTAMP\",",
+                "  \"ami_id\": \"$AMI_ID\",",
+                "  \"instance_id\": \"$INSTANCE_ID\",",
+                "  \"stig_method\": \"redhat_official_ansible\",",
+                "  \"role_name\": \"RedHatOfficial.rhel9_stig\",",
+                "  \"ansible_exit_code\": $ANSIBLE_EXIT_CODE,",
+                "  \"playbook_status\": \"$([ $ANSIBLE_EXIT_CODE -eq 0 ] && echo 'completed_successfully' || echo 'completed_with_errors')\",",
+                "  \"log_files\": [",
+                "    \"/tmp/ansible-stig-execution.log\",",
+                "    \"/tmp/stig-application-summary.txt\"",
+                "  ],",
+                "  \"message\": \"Red Hat Official RHEL 9 STIG role execution completed\"",
+                "}",
+                "EOF",
+                "",
+                "# Upload results to S3",
+                "echo 'Uploading STIG results to S3...'",
+                "aws s3 cp /tmp/rhel9-stig-results-$TIMESTAMP.json s3://${var.s3_bucket_name}/rhel9-stig/ami-$AMI_ID/instance-$INSTANCE_ID/rhel9-stig-results-$TIMESTAMP.json || echo 'Failed to upload results'",
+                "aws s3 cp /tmp/ansible-stig-execution.log s3://${var.s3_bucket_name}/rhel9-stig/ami-$AMI_ID/instance-$INSTANCE_ID/ansible-execution-$TIMESTAMP.log || echo 'Failed to upload execution log'",
+                "aws s3 cp /tmp/ansible-stig/rhel9-stig-playbook.yml s3://${var.s3_bucket_name}/rhel9-stig/ami-$AMI_ID/instance-$INSTANCE_ID/playbook-$TIMESTAMP.yml || echo 'Failed to upload playbook'",
+                "aws s3 cp /tmp/stig-application-summary.txt s3://${var.s3_bucket_name}/rhel9-stig/ami-$AMI_ID/instance-$INSTANCE_ID/summary-$TIMESTAMP.txt || echo 'Failed to upload summary'",
+                "",
+                "# Display completion status",
+                "if [ $ANSIBLE_EXIT_CODE -eq 0 ]; then",
+                "  echo 'Red Hat Official RHEL 9 STIG application completed successfully'",
+                "  echo 'All STIG controls have been applied according to the role configuration'",
+                "else",
+                "  echo 'Red Hat Official RHEL 9 STIG application completed with some issues'",
+                "  echo 'Check the execution log for details: /tmp/ansible-stig-execution.log'",
+                "  echo 'Exit code: $ANSIBLE_EXIT_CODE'",
+                "fi",
+                "",
+                "echo 'STIG application summary available at: /tmp/stig-application-summary.txt'"
+              ]
+            }
+          }
+        ]
+      }
+    ]
+  })
+
+  tags = var.tags
+}
 
 # SCAP Compliance Test component
 resource "aws_imagebuilder_component" "scap_compliance_test" {
@@ -295,11 +485,6 @@ resource "aws_imagebuilder_image_recipe" "rhel9" {
     component_arn = "arn:${data.aws_partition.current.partition}:imagebuilder:${data.aws_region.current.name}:aws:component/aws-cli-version-2-linux/x.x.x"
   }
 
-  component {
-    component_arn = "arn:${data.aws_partition.current.partition}:imagebuilder:${data.aws_region.current.name}:aws:component/stig-build-linux-high/x.x.x"
-  }
-
-
   # Custom components
   component {
     component_arn = aws_imagebuilder_component.docker_install.arn
@@ -307,6 +492,10 @@ resource "aws_imagebuilder_image_recipe" "rhel9" {
 
   component {
     component_arn = aws_imagebuilder_component.java_install.arn
+  }
+
+  component {
+    component_arn = aws_imagebuilder_component.ansible_stig.arn
   }
 
   component {
