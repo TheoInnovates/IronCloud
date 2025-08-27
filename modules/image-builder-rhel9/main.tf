@@ -53,17 +53,14 @@ resource "aws_iam_role_policy" "s3_bucket_policy" {
           "s3:GetObject",
           "s3:PutObject",
           "s3:PutObjectAcl",
-          "s3:DeleteObject"
-        ]
-        Resource = "arn:${data.aws_partition.current.partition}:s3:::${var.s3_bucket_name}/*"
-      },
-      {
-        Effect = "Allow"
-        Action = [
+          "s3:DeleteObject",
           "s3:ListBucket",
           "s3:GetBucketLocation"
         ]
-        Resource = "arn:${data.aws_partition.current.partition}:s3:::${var.s3_bucket_name}"
+        Resource = [
+          "arn:${data.aws_partition.current.partition}:s3:::${var.s3_bucket_name}",
+          "arn:${data.aws_partition.current.partition}:s3:::${var.s3_bucket_name}/*"
+        ]
       }
     ]
   })
@@ -157,8 +154,8 @@ resource "aws_imagebuilder_component" "ansible_stig" {
                 "ansible-galaxy collection install community.general",
                 "ansible-galaxy collection install ansible.posix",
                 "# Create ansible working directory",
-                "mkdir -p /tmp/ansible-stig",
-                "cd /tmp/ansible-stig"
+                "mkdir -p /home/root/ansible-stig",
+                "cd /home/root/ansible-stig"
               ]
             }
           },
@@ -167,7 +164,7 @@ resource "aws_imagebuilder_component" "ansible_stig" {
             action = "ExecuteBash"
             inputs = {
               commands = [
-                "cd /tmp/ansible-stig",
+                "cd /home/root/ansible-stig",
                 "# Install the Red Hat Official RHEL 9 STIG role",
                 "ansible-galaxy install RedHatOfficial.rhel9_stig",
                 "# Create requirements.yml for better dependency management",
@@ -188,7 +185,7 @@ resource "aws_imagebuilder_component" "ansible_stig" {
             action = "ExecuteBash"
             inputs = {
               commands = [
-                "cd /tmp/ansible-stig",
+                "cd /home/root/ansible-stig",
                 "# Create inventory file",
                 "echo 'localhost ansible_connection=local' > inventory",
                 "# Create the STIG playbook using the Red Hat Official role",
@@ -247,7 +244,7 @@ resource "aws_imagebuilder_component" "ansible_stig" {
                 "          CAT I (High): true",
                 "          CAT II (Medium): true",
                 "          CAT III (Low): false",
-                "        dest: /tmp/stig-application-summary.txt",
+                "        dest: /home/root/stig-application-summary.txt",
                 "EOF",
                 "echo 'STIG playbook created successfully'"
               ]
@@ -258,23 +255,25 @@ resource "aws_imagebuilder_component" "ansible_stig" {
             action = "ExecuteBash"
             inputs = {
               commands = [
-                "cd /tmp/ansible-stig",
+                "cd /home/root/ansible-stig",
                 "# Set Ansible configuration for better output",
                 "export ANSIBLE_STDOUT_CALLBACK=yaml",
                 "export ANSIBLE_HOST_KEY_CHECKING=False",
                 "",
                 "# Run the Red Hat Official STIG playbook",
                 "echo 'Starting Red Hat Official RHEL 9 STIG application...'",
-                "ansible-playbook -i inventory rhel9-stig-playbook.yml -v > /tmp/ansible-stig-execution.log 2>&1",
+                "ansible-playbook -i inventory rhel9-stig-playbook.yml -v > /home/root/ansible-stig-execution.log 2>&1",
                 "ANSIBLE_EXIT_CODE=$?",
                 "",
                 "# Create detailed results",
                 "TIMESTAMP=$(date +%Y%m%d-%H%M%S)",
-                "AMI_ID=$(curl -s http://169.254.169.254/latest/meta-data/ami-id || echo 'unknown')",
-                "INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id || echo 'unknown')",
+                "# Get IMDSv2 token for metadata access",
+                "TOKEN=$(curl -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600' -s http://169.254.169.254/latest/api/token)",
+                "AMI_ID=$(curl -H \"X-aws-ec2-metadata-token: $TOKEN\" -s http://169.254.169.254/latest/meta-data/ami-id || echo 'unknown')",
+                "INSTANCE_ID=$(curl -H \"X-aws-ec2-metadata-token: $TOKEN\" -s http://169.254.169.254/latest/meta-data/instance-id || echo 'unknown')",
                 "",
                 "# Create comprehensive results summary",
-                "cat > /tmp/rhel9-stig-results-$TIMESTAMP.json << EOF",
+                "cat > /home/root/rhel9-stig-results-$TIMESTAMP.json << EOF",
                 "{",
                 "  \"timestamp\": \"$TIMESTAMP\",",
                 "  \"ami_id\": \"$AMI_ID\",",
@@ -284,8 +283,8 @@ resource "aws_imagebuilder_component" "ansible_stig" {
                 "  \"ansible_exit_code\": $ANSIBLE_EXIT_CODE,",
                 "  \"playbook_status\": \"$([ $ANSIBLE_EXIT_CODE -eq 0 ] && echo 'completed_successfully' || echo 'completed_with_errors')\",",
                 "  \"log_files\": [",
-                "    \"/tmp/ansible-stig-execution.log\",",
-                "    \"/tmp/stig-application-summary.txt\"",
+                "    \"/home/root/ansible-stig-execution.log\",",
+                "    \"/home/root/stig-application-summary.txt\"",
                 "  ],",
                 "  \"message\": \"Red Hat Official RHEL 9 STIG role execution completed\"",
                 "}",
@@ -293,10 +292,10 @@ resource "aws_imagebuilder_component" "ansible_stig" {
                 "",
                 "# Upload results to S3",
                 "echo 'Uploading STIG results to S3...'",
-                "aws s3 cp /tmp/rhel9-stig-results-$TIMESTAMP.json s3://${var.s3_bucket_name}/rhel9-stig/ami-$AMI_ID/instance-$INSTANCE_ID/rhel9-stig-results-$TIMESTAMP.json || echo 'Failed to upload results'",
-                "aws s3 cp /tmp/ansible-stig-execution.log s3://${var.s3_bucket_name}/rhel9-stig/ami-$AMI_ID/instance-$INSTANCE_ID/ansible-execution-$TIMESTAMP.log || echo 'Failed to upload execution log'",
-                "aws s3 cp /tmp/ansible-stig/rhel9-stig-playbook.yml s3://${var.s3_bucket_name}/rhel9-stig/ami-$AMI_ID/instance-$INSTANCE_ID/playbook-$TIMESTAMP.yml || echo 'Failed to upload playbook'",
-                "aws s3 cp /tmp/stig-application-summary.txt s3://${var.s3_bucket_name}/rhel9-stig/ami-$AMI_ID/instance-$INSTANCE_ID/summary-$TIMESTAMP.txt || echo 'Failed to upload summary'",
+                "aws s3 cp /home/root/rhel9-stig-results-$TIMESTAMP.json s3://${var.s3_bucket_name}/rhel9-stig/ami-$AMI_ID/instance-$INSTANCE_ID/rhel9-stig-results-$TIMESTAMP.json || echo 'Failed to upload results'",
+                "aws s3 cp /home/root/ansible-stig-execution.log s3://${var.s3_bucket_name}/rhel9-stig/ami-$AMI_ID/instance-$INSTANCE_ID/ansible-execution-$TIMESTAMP.log || echo 'Failed to upload execution log'",
+                "aws s3 cp /home/root/ansible-stig/rhel9-stig-playbook.yml s3://${var.s3_bucket_name}/rhel9-stig/ami-$AMI_ID/instance-$INSTANCE_ID/playbook-$TIMESTAMP.yml || echo 'Failed to upload playbook'",
+                "aws s3 cp /home/root/stig-application-summary.txt s3://${var.s3_bucket_name}/rhel9-stig/ami-$AMI_ID/instance-$INSTANCE_ID/summary-$TIMESTAMP.txt || echo 'Failed to upload summary'",
                 "",
                 "# Display completion status",
                 "if [ $ANSIBLE_EXIT_CODE -eq 0 ]; then",
@@ -304,11 +303,11 @@ resource "aws_imagebuilder_component" "ansible_stig" {
                 "  echo 'All STIG controls have been applied according to the role configuration'",
                 "else",
                 "  echo 'Red Hat Official RHEL 9 STIG application completed with some issues'",
-                "  echo 'Check the execution log for details: /tmp/ansible-stig-execution.log'",
+                "  echo 'Check the execution log for details: /home/root/ansible-stig-execution.log'",
                 "  echo 'Exit code: $ANSIBLE_EXIT_CODE'",
                 "fi",
                 "",
-                "echo 'STIG application summary available at: /tmp/stig-application-summary.txt'"
+                "echo 'STIG application summary available at: /home/root/stig-application-summary.txt'"
               ]
             }
           }
@@ -344,31 +343,33 @@ resource "aws_imagebuilder_component" "scap_compliance_test" {
                 "dnf install -y openscap-scanner scap-security-guide",
                 "# Create timestamp for unique file naming",
                 "TIMESTAMP=$(date +%Y%m%d-%H%M%S)",
-                "AMI_ID=$(curl -s http://169.254.169.254/latest/meta-data/ami-id)",
-                "INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)",
+                "# Get IMDSv2 token for metadata access",
+                "TOKEN=$(curl -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600' -s http://169.254.169.254/latest/api/token)",
+                "AMI_ID=$(curl -H \"X-aws-ec2-metadata-token: $TOKEN\" -s http://169.254.169.254/latest/meta-data/ami-id)",
+                "INSTANCE_ID=$(curl -H \"X-aws-ec2-metadata-token: $TOKEN\" -s http://169.254.169.254/latest/meta-data/instance-id)",
                 "# Run SCAP compliance scan",
-                "oscap xccdf eval --profile xccdf_org.ssgproject.content_profile_stig --results /tmp/scap-results-$TIMESTAMP.xml --report /tmp/scap-report-$TIMESTAMP.html /usr/share/xml/scap/ssg/content/ssg-rhel9-ds.xml",
+                "oscap xccdf eval --profile xccdf_org.ssgproject.content_profile_stig --results /home/root/scap-results-$TIMESTAMP.xml --report /home/root/scap-report-$TIMESTAMP.html /usr/share/xml/scap/ssg/content/ssg-rhel9-ds.xml",
                 "SCAP_EXIT_CODE=$?",
                 "# Upload results to S3 bucket",
                 "echo 'Uploading SCAP results to S3...'",
-                "aws s3 cp /tmp/scap-results-$TIMESTAMP.xml s3://${var.s3_bucket_name}/scap-compliance/ami-$AMI_ID/instance-$INSTANCE_ID/scap-results-$TIMESTAMP.xml",
-                "aws s3 cp /tmp/scap-report-$TIMESTAMP.html s3://${var.s3_bucket_name}/scap-compliance/ami-$AMI_ID/instance-$INSTANCE_ID/scap-report-$TIMESTAMP.html",
+                "aws s3 cp /home/root/scap-results-$TIMESTAMP.xml s3://${var.s3_bucket_name}/scap-compliance/ami-$AMI_ID/instance-$INSTANCE_ID/scap-results-$TIMESTAMP.xml",
+                "aws s3 cp /home/root/scap-report-$TIMESTAMP.html s3://${var.s3_bucket_name}/scap-compliance/ami-$AMI_ID/instance-$INSTANCE_ID/scap-report-$TIMESTAMP.html",
                 "# Create summary file",
-                "echo '{' > /tmp/scap-summary-$TIMESTAMP.json",
-                "echo '  \"timestamp\": \"'$TIMESTAMP'\",' >> /tmp/scap-summary-$TIMESTAMP.json",
-                "echo '  \"ami_id\": \"'$AMI_ID'\",' >> /tmp/scap-summary-$TIMESTAMP.json",
-                "echo '  \"instance_id\": \"'$INSTANCE_ID'\",' >> /tmp/scap-summary-$TIMESTAMP.json",
-                "echo '  \"scap_exit_code\": '$SCAP_EXIT_CODE',' >> /tmp/scap-summary-$TIMESTAMP.json",
+                "echo '{' > /home/root/scap-summary-$TIMESTAMP.json",
+                "echo '  \"timestamp\": \"'$TIMESTAMP'\",' >> /home/root/scap-summary-$TIMESTAMP.json",
+                "echo '  \"ami_id\": \"'$AMI_ID'\",' >> /home/root/scap-summary-$TIMESTAMP.json",
+                "echo '  \"instance_id\": \"'$INSTANCE_ID'\",' >> /home/root/scap-summary-$TIMESTAMP.json",
+                "echo '  \"scap_exit_code\": '$SCAP_EXIT_CODE',' >> /home/root/scap-summary-$TIMESTAMP.json",
                 "if [ $SCAP_EXIT_CODE -eq 0 ]; then",
-                "  echo '  \"status\": \"PASSED\",' >> /tmp/scap-summary-$TIMESTAMP.json",
-                "  echo '  \"message\": \"SCAP compliance scan passed successfully\"' >> /tmp/scap-summary-$TIMESTAMP.json",
+                "  echo '  \"status\": \"PASSED\",' >> /home/root/scap-summary-$TIMESTAMP.json",
+                "  echo '  \"message\": \"SCAP compliance scan passed successfully\"' >> /home/root/scap-summary-$TIMESTAMP.json",
                 "else",
-                "  echo '  \"status\": \"FAILED\",' >> /tmp/scap-summary-$TIMESTAMP.json",
-                "  echo '  \"message\": \"SCAP compliance scan completed with findings\"' >> /tmp/scap-summary-$TIMESTAMP.json",
+                "  echo '  \"status\": \"FAILED\",' >> /home/root/scap-summary-$TIMESTAMP.json",
+                "  echo '  \"message\": \"SCAP compliance scan completed with findings\"' >> /home/root/scap-summary-$TIMESTAMP.json",
                 "fi",
-                "echo '}' >> /tmp/scap-summary-$TIMESTAMP.json",
+                "echo '}' >> /home/root/scap-summary-$TIMESTAMP.json",
                 "# Upload summary to S3",
-                "aws s3 cp /tmp/scap-summary-$TIMESTAMP.json s3://${var.s3_bucket_name}/scap-compliance/ami-$AMI_ID/instance-$INSTANCE_ID/scap-summary-$TIMESTAMP.json",
+                "aws s3 cp /home/root/scap-summary-$TIMESTAMP.json s3://${var.s3_bucket_name}/scap-compliance/ami-$AMI_ID/instance-$INSTANCE_ID/scap-summary-$TIMESTAMP.json",
                 "# Display results",
                 "echo 'SCAP compliance test completed'",
                 "echo 'Results uploaded to: s3://${var.s3_bucket_name}/scap-compliance/ami-'$AMI_ID'/instance-'$INSTANCE_ID'/'",
