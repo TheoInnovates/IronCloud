@@ -126,188 +126,101 @@ resource "aws_imagebuilder_component" "docker_install" {
   tags = var.tags
 }
 
-# Red Hat Official Ansible STIG component
+# Simple RHEL 9 STIG Ansible component
 resource "aws_imagebuilder_component" "ansible_stig" {
-  name        = "${var.name}-redhat-ansible-stig"
-  description = "Install Ansible and run Red Hat Official RHEL 9 STIG role"
+  name        = "${var.name}-simple-ansible-stig"
+  description = "Simple RHEL 9 STIG application using DISA Ansible content from S3"
   platform    = "Linux"
   version     = "1.0.0"
 
   data = yamlencode({
-    name          = "${var.name}-redhat-ansible-stig"
-    description   = "Install Ansible and run Red Hat Official RHEL 9 STIG role"
+    name          = "${var.name}-simple-ansible-stig"
+    description   = "Simple RHEL 9 STIG application using DISA Ansible content from S3"
     schemaVersion = "1.0"
     phases = [
       {
         name = "build"
         steps = [
           {
-            name   = "InstallAnsible"
+            name   = "InstallAnsibleAndApplySTIG"
             action = "ExecuteBash"
             inputs = {
               commands = [
-                "# Install EPEL repository for Ansible",
-                "dnf install -y epel-release",
-                "# Install Ansible and dependencies",
-                "dnf install -y ansible-core python3-pip git",
-                "# Install additional Ansible collections that may be needed",
-                "ansible-galaxy collection install community.general",
-                "ansible-galaxy collection install ansible.posix",
-                "# Create ansible working directory",
-                "mkdir -p /home/root/ansible-stig",
-                "cd /home/root/ansible-stig"
-              ]
-            }
-          },
-          {
-            name   = "InstallRedHatSTIGRole"
-            action = "ExecuteBash"
-            inputs = {
-              commands = [
-                "cd /home/root/ansible-stig",
-                "# Install the Red Hat Official RHEL 9 STIG role",
-                "ansible-galaxy install RedHatOfficial.rhel9_stig",
-                "# Create requirements.yml for better dependency management",
-                "cat > requirements.yml << 'EOF'",
+                "# Simple RHEL 9 STIG Ansible Setup",
+                "set -e",
+                "",
+                "# Install EPEL repository",
+                "yum install -y https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm",
+                "",
+                "# Install Ansible",
+                "yum install -y ansible unzip",
+                "",
+                "# Work in /tmp directory",
+                "cd /tmp",
+                "",
+                "# Download RHEL STIG Ansible content from S3",
+                "aws s3 cp s3://${var.s3_bucket_name}/rhel9_imagebuilder/rhel9STIG-ansible.zip ./",
+                "",
+                "# Extract the content",
+                "unzip rhel9STIG-ansible.zip",
+                "",
+                "# Create site.yml",
+                "cat > site.yml << 'EOF'",
                 "---",
-                "roles:",
-                "  - name: RedHatOfficial.rhel9_stig",
-                "    version: latest",
-                "EOF",
-                "# Install from requirements file",
-                "ansible-galaxy install -r requirements.yml",
-                "echo 'Red Hat STIG role installed successfully'"
-              ]
-            }
-          },
-          {
-            name   = "CreateSTIGPlaybook"
-            action = "ExecuteBash"
-            inputs = {
-              commands = [
-                "cd /home/root/ansible-stig",
-                "# Create inventory file",
-                "echo 'localhost ansible_connection=local' > inventory",
-                "# Create the STIG playbook using the Red Hat Official role",
-                "cat > rhel9-stig-playbook.yml << 'EOF'",
-                "---",
-                "- name: Apply RHEL 9 STIG using Red Hat Official Role",
-                "  hosts: localhost",
-                "  become: true",
-                "  gather_facts: true",
-                "",
-                "  vars:",
-                "    # STIG Configuration Variables",
-                "    # Set to false to skip rules that might break basic functionality",
-                "    rhel9stig_disruption_high: false",
-                "    rhel9stig_complexity_high: false",
-                "",
-                "    # Configure based on your environment",
-                "    rhel9stig_gui: false",
-                "    rhel9stig_system_is_router: false",
-                "    rhel9stig_ipv6_required: false",
-                "",
-                "    # Patch level configuration",
-                "    rhel9stig_cat1_patch: true   # High severity",
-                "    rhel9stig_cat2_patch: true   # Medium severity", 
-                "    rhel9stig_cat3_patch: false  # Low severity (can be disruptive)",
-                "",
-                "    # Skip rules that might interfere with cloud environments",
-                "    rhel9stig_skip_for_cloud:",
-                "      - rhel_09_010001  # Disable USB storage (might affect cloud)",
-                "      - rhel_09_010002  # Disable FireWire (not applicable)",
-                "",
-                "    # Configure authentication",
-                "    rhel9stig_password_complexity:",
-                "      minlen: 15",
-                "      dcredit: -1",
-                "      ucredit: -1", 
-                "      lcredit: -1",
-                "      ocredit: -1",
-                "",
-                "    # Configure audit log settings",
-                "    rhel9stig_audit_log_storage_size: 100",
-                "",
+                "- hosts: localhost",
+                "  gather_facts: yes",
+                "  become: yes",
+                "  vars_files:",
+                "    - custom_vars.yml",
                 "  roles:",
-                "    - RedHatOfficial.rhel9_stig",
-                "",
-                "  post_tasks:",
-                "    - name: Create STIG application summary",
-                "      copy:",
-                "        content: |",
-                "          RHEL 9 STIG Application Summary",
-                "          ================================",
-                "          Applied on: $(date -u +%Y-%m-%dT%H:%M:%SZ)",
-                "          Hostname: $(hostname)",
-                "          RHEL Version: $(cat /etc/redhat-release)",
-                "          STIG Role: RedHatOfficial.rhel9_stig",
-                "          CAT I (High): true",
-                "          CAT II (Medium): true",
-                "          CAT III (Low): false",
-                "        dest: /home/root/stig-application-summary.txt",
+                "    - rhel9STIG",
                 "EOF",
-                "echo 'STIG playbook created successfully'"
-              ]
-            }
-          },
-          {
-            name   = "RunRedHatSTIG"
-            action = "ExecuteBash"
-            inputs = {
-              commands = [
-                "cd /home/root/ansible-stig",
-                "# Set Ansible configuration for better output",
-                "export ANSIBLE_STDOUT_CALLBACK=yaml",
-                "export ANSIBLE_HOST_KEY_CHECKING=False",
                 "",
-                "# Run the Red Hat Official STIG playbook",
-                "echo 'Starting Red Hat Official RHEL 9 STIG application...'",
-                "ansible-playbook -i inventory rhel9-stig-playbook.yml -v > /home/root/ansible-stig-execution.log 2>&1",
-                "ANSIBLE_EXIT_CODE=$?",
+                "# Create custom_vars.yml",
+                "cat > custom_vars.yml << 'EOF'",
+                "---",
+                "# Custom RHEL 9 STIG Variables",
+                "# Add your customizations here",
                 "",
-                "# Create detailed results",
+                "# Example: Disable specific STIG rules if needed",
+                "# rhel9STIG_stigrule_258117_Manage: False",
+                "",
+                "# Example: Set minimum password length",
+                "# rhel9STIG_stigrule_258107__etc_security_pwquality_conf_Line: 'minlen = 14'",
+                "EOF",
+                "",
+                "# Set permissions",
+                "chmod 644 site.yml custom_vars.yml",
+                "chmod +x enforce.sh",
+                "",
+                "# Run the enforce.sh script",
+                "./enforce.sh",
+                "",
+                "# Log completion",
+                "echo 'RHEL 9 STIG enforcement completed via enforce.sh script'",
+                "",
+                "# Create completion summary",
                 "TIMESTAMP=$(date +%Y%m%d-%H%M%S)",
-                "# Get IMDSv2 token for metadata access",
                 "TOKEN=$(curl -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600' -s http://169.254.169.254/latest/api/token)",
                 "AMI_ID=$(curl -H \"X-aws-ec2-metadata-token: $TOKEN\" -s http://169.254.169.254/latest/meta-data/ami-id || echo 'unknown')",
                 "INSTANCE_ID=$(curl -H \"X-aws-ec2-metadata-token: $TOKEN\" -s http://169.254.169.254/latest/meta-data/instance-id || echo 'unknown')",
                 "",
-                "# Create comprehensive results summary",
-                "cat > /home/root/rhel9-stig-results-$TIMESTAMP.json << EOF",
+                "# Create results summary",
+                "cat > /tmp/stig-completion-summary.json << EOF",
                 "{",
                 "  \"timestamp\": \"$TIMESTAMP\",",
                 "  \"ami_id\": \"$AMI_ID\",",
                 "  \"instance_id\": \"$INSTANCE_ID\",",
-                "  \"stig_method\": \"redhat_official_ansible\",",
-                "  \"role_name\": \"RedHatOfficial.rhel9_stig\",",
-                "  \"ansible_exit_code\": $ANSIBLE_EXIT_CODE,",
-                "  \"playbook_status\": \"$([ $ANSIBLE_EXIT_CODE -eq 0 ] && echo 'completed_successfully' || echo 'completed_with_errors')\",",
-                "  \"log_files\": [",
-                "    \"/home/root/ansible-stig-execution.log\",",
-                "    \"/home/root/stig-application-summary.txt\"",
-                "  ],",
-                "  \"message\": \"Red Hat Official RHEL 9 STIG role execution completed\"",
+                "  \"stig_method\": \"disa_ansible_enforce_script\",",
+                "  \"status\": \"completed\",",
+                "  \"message\": \"RHEL 9 STIG applied using DISA enforce.sh script\"",
                 "}",
                 "EOF",
                 "",
-                "# Upload results to S3",
-                "echo 'Uploading STIG results to S3...'",
-                "aws s3 cp /home/root/rhel9-stig-results-$TIMESTAMP.json s3://${var.s3_bucket_name}/rhel9-stig/ami-$AMI_ID/instance-$INSTANCE_ID/rhel9-stig-results-$TIMESTAMP.json || echo 'Failed to upload results'",
-                "aws s3 cp /home/root/ansible-stig-execution.log s3://${var.s3_bucket_name}/rhel9-stig/ami-$AMI_ID/instance-$INSTANCE_ID/ansible-execution-$TIMESTAMP.log || echo 'Failed to upload execution log'",
-                "aws s3 cp /home/root/ansible-stig/rhel9-stig-playbook.yml s3://${var.s3_bucket_name}/rhel9-stig/ami-$AMI_ID/instance-$INSTANCE_ID/playbook-$TIMESTAMP.yml || echo 'Failed to upload playbook'",
-                "aws s3 cp /home/root/stig-application-summary.txt s3://${var.s3_bucket_name}/rhel9-stig/ami-$AMI_ID/instance-$INSTANCE_ID/summary-$TIMESTAMP.txt || echo 'Failed to upload summary'",
+                "# Upload summary to S3",
+                "aws s3 cp /tmp/stig-completion-summary.json s3://${var.s3_bucket_name}/rhel9-stig/ami-$AMI_ID/instance-$INSTANCE_ID/stig-completion-$TIMESTAMP.json || echo 'Failed to upload summary'",
                 "",
-                "# Display completion status",
-                "if [ $ANSIBLE_EXIT_CODE -eq 0 ]; then",
-                "  echo 'Red Hat Official RHEL 9 STIG application completed successfully'",
-                "  echo 'All STIG controls have been applied according to the role configuration'",
-                "else",
-                "  echo 'Red Hat Official RHEL 9 STIG application completed with some issues'",
-                "  echo 'Check the execution log for details: /home/root/ansible-stig-execution.log'",
-                "  echo 'Exit code: $ANSIBLE_EXIT_CODE'",
-                "fi",
-                "",
-                "echo 'STIG application summary available at: /home/root/stig-application-summary.txt'"
+                "echo 'STIG application completed successfully'"
               ]
             }
           }
